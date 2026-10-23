@@ -1,0 +1,9 @@
+# /etc/redis/redis.conf (potongan yang diubah)
+bind 127.0.0.1 -::1
+protected-mode yes
+requirepass [password-kuat]
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+# cache murni: persistence boleh dimatikan
+save ""
+appendonly no

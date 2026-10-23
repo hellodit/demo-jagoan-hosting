@@ -1,0 +1,13 @@
+[Unit]
+Description=Redis cache demo (Go + Gin)
+After=network.target postgresql.service redis-server.service
+
+[Service]
+EnvironmentFile=/etc/redis-cache-demo.env
+ExecStart=/usr/local/bin/redis-cache-demo
+Restart=on-failure
+User=www-data
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
