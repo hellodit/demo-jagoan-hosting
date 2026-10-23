@@ -1,0 +1,62 @@
+# app + Redis. PostgreSQL dan nginx berjalan langsung di host.
+#
+#   cp .env.example .env   # lalu isi password
+#   docker compose up -d --build
+#
+# Tidak ada port yang di-publish: nginx di host memanggil app langsung lewat
+# IP bridge (172.28.0.10), dan app memanggil PostgreSQL host lewat gateway
+# bridge (172.28.0.1). Redis hanya bisa dijangkau dari dalam network ini.
+name: redis-cache-demo
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    ulimits:
+      nofile: 65535
+    networks:
+      demo:
+        ipv4_address: 172.28.0.10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # Murni cache: tanpa persistence. Dijalankan langsung sebagai redis-server
+    # supaya entrypoint image menurunkan proses ke user redis (bukan root).
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi di .env}
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      demo:
+        ipv4_address: 172.28.0.11
+
+networks:
+  demo:
+    driver_opts:
+      com.docker.network.bridge.name: br-demo
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
