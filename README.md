@@ -37,7 +37,8 @@ Bandingkan keduanya tanpa restart, cukup ganti URL. `STAMPEDE_PROTECT=true` mena
 | `config.go` | Konfigurasi dari env |
 | `db/` | Skema dan seed (~500rb produk, ~2jt review, distribusi timpang) |
 | `k6/` | `load-test.js` (closed model, sama dengan slide), `arrival-rate.js` (open model), `stampede.js` |
-| `deploy/` | Contoh env, unit systemd, potongan `redis.conf` |
+| `Dockerfile`, `docker-compose.yml` | Image app (distroless, nonroot) dan Redis |
+| `deploy/` | `nginx.conf` (upstream keepalive ke kontainer app) |
 
 ## Menjalankan di lokal
 
@@ -54,15 +55,38 @@ curl localhost:8080/debug/stats
 
 ## Deploy ke VPS
 
-```bash
-make build-linux                                  # dari Mac
-scp bin/redis-cache-demo-linux-amd64 vps:/usr/local/bin/redis-cache-demo
-scp deploy/redis-cache-demo.service vps:/etc/systemd/system/
-scp deploy/demo.env.example vps:/etc/redis-cache-demo.env   # lalu edit
-ssh vps 'sudo systemctl daemon-reload && sudo systemctl enable --now redis-cache-demo'
+Susunan di server: **nginx dan PostgreSQL di host**, **app dan Redis di Docker Compose**.
+Docker dan repo dijalankan oleh user `deploy` (anggota grup `docker`), bukan root.
+Di dalam kontainer, app berjalan sebagai `nonroot` (distroless) dan Redis sebagai `redis`.
+
+```
+internet :443 ─▶ nginx (host) ─▶ 172.28.0.10:8080 app ─▶ 172.28.0.11 redis
+                                         └──────────▶ 172.28.0.1:5432 PostgreSQL (host)
 ```
 
-Nyalakan/matikan proteksi stampede: edit `STAMPEDE_PROTECT` di `/etc/redis-cache-demo.env`, lalu `sudo systemctl restart redis-cache-demo`.
+Tidak ada port Docker yang di-publish. nginx memanggil IP kontainer langsung, dan
+ufw hanya membuka 22, 80, 443, plus 5432 untuk subnet `172.28.0.0/16`.
+
+Setup awal (sekali, sebagai root):
+
+1. `apt install docker.io docker-compose-v2 postgresql nginx certbot python3-certbot-nginx ufw`
+2. User `deploy` + `usermod -aG docker deploy`
+3. PostgreSQL: `shared_preload_libraries = 'pg_stat_statements'`, `listen_addresses = '*'`,
+   role dan database `shop`, baris `pg_hba.conf`:
+   `host shop shop 172.28.0.0/16 scram-sha-256`
+4. `deploy/nginx.conf` ke `/etc/nginx/sites-available/`, lalu `certbot --nginx -d [domain]`
+
+Sebagai user `deploy`:
+
+```bash
+git clone https://github.com/hellodit/demo-jagoan-hosting && cd demo-jagoan-hosting
+cp .env.example .env && chmod 600 .env    # isi password
+docker compose up -d --build
+make seed                                 # memakai DATABASE_URL dari .env via 127.0.0.1
+make deploy                               # update berikutnya: git pull + build ulang
+```
+
+Nyalakan/matikan proteksi stampede: edit `STAMPEDE_PROTECT` di `.env`, lalu `docker compose up -d`.
 
 ## Urutan demo
 
@@ -70,13 +94,13 @@ Nyalakan/matikan proteksi stampede: edit `STAMPEDE_PROTECT` di `/etc/redis-cache
 # Sebelum setiap babak
 make reset                                     # stats app, FLUSHDB, pg_stat_statements_reset
 # Babak 1: tanpa cache
-k6 run -e BASE_URL=http://[ip-vps]:8080 -e VARIANT=nocache k6/load-test.js
-curl -s http://[ip-vps]:8080/debug/stats | jq .nocache
+k6 run -e BASE_URL=https://[domain] -e VARIANT=nocache k6/load-test.js
+curl -s https://[domain]/debug/stats | jq .nocache
 # Babak 2: dengan cache, parameter k6 sama, tanpa restart
-k6 run -e BASE_URL=http://[ip-vps]:8080 -e VARIANT=cache k6/load-test.js
-curl -s http://[ip-vps]:8080/debug/stats | jq .cache
+k6 run -e BASE_URL=https://[domain] -e VARIANT=cache k6/load-test.js
+curl -s https://[domain]/debug/stats | jq .cache
 # Babak 3 (stampede): POPULAR_TTL=5s, bandingkan STAMPEDE_PROTECT=false vs true
-k6 run -e BASE_URL=http://[ip-vps]:8080 k6/stampede.js
+k6 run -e BASE_URL=https://[domain] k6/stampede.js
 ```
 
 Yang dibacakan dari `/debug/stats`:
