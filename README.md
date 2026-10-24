@@ -16,6 +16,7 @@ Bandingkan keduanya tanpa restart, cukup ganti URL. `STAMPEDE_PROTECT=true` mena
 
 | Method | Path | Keterangan |
 |---|---|---|
+| GET | `/` dan `/healthz` | Health check JSON: ping PostgreSQL dan Redis, 503 kalau salah satu down |
 | GET | `/api/nocache/products/:id` | Detail produk: JOIN kategori + agregasi rating, langsung ke DB |
 | GET | `/api/cache/products/:id` | Sama, dengan cache-aside yang ditulis eksplisit di handler |
 | GET | `/api/nocache/products/popular` | 20 produk terpopuler 30 hari. Query berat (~150-200 ms) |

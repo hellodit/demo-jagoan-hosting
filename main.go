@@ -74,7 +74,9 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+	health := &HealthHandler{db: db, rdb: rdb}
+	r.GET("/", health.Health)
+	r.GET("/healthz", health.Health)
 	// Daftarkan /products/popular sebelum /products/:id.
 	nc := r.Group("/api/nocache")
 	nc.GET("/products/popular", nocache.Popular)
