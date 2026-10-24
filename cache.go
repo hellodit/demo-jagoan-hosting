@@ -8,33 +8,11 @@ import (
 	"errors"
 	"log"
 	"math/rand/v2"
-	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/singleflight"
 )
-
-// Stats dihitung di sisi aplikasi supaya hit ratio per fitur terlihat,
-// tidak tercampur key lain di Redis.
-type Stats struct {
-	CacheHits        atomic.Int64
-	CacheMisses      atomic.Int64
-	CacheErrors      atomic.Int64
-	DBProductQueries atomic.Int64
-	DBPopularQueries atomic.Int64
-	SingleflightDup  atomic.Int64 // request yang "nebeng" hasil request lain
-	LockWaits        atomic.Int64 // request yang menunggu instance lain mengisi cache
-}
-
-func (s *Stats) Reset() {
-	for _, c := range []*atomic.Int64{
-		&s.CacheHits, &s.CacheMisses, &s.CacheErrors, &s.DBProductQueries,
-		&s.DBPopularQueries, &s.SingleflightDup, &s.LockWaits,
-	} {
-		c.Store(0)
-	}
-}
 
 // Cache membungkus go-redis dengan pola cache-aside.
 // Kalau protect = true (STAMPEDE_PROTECT), miss dilindungi dari stampede:
@@ -45,7 +23,6 @@ type Cache struct {
 	rdb     *redis.Client
 	protect bool
 	group   singleflight.Group
-	stats   *Stats
 }
 
 type LoadFunc func(ctx context.Context) ([]byte, error)
@@ -54,15 +31,11 @@ type LoadFunc func(ctx context.Context) ([]byte, error)
 // Padanan Cache::remember di Laravel, versi []byte.
 func (c *Cache) Remember(ctx context.Context, key string, ttl time.Duration, load LoadFunc) ([]byte, error) {
 	b, err := c.rdb.Get(ctx, key).Bytes()
-	switch {
-	case err == nil:
-		c.stats.CacheHits.Add(1)
+	if err == nil {
 		return b, nil
-	case errors.Is(err, redis.Nil):
-		c.stats.CacheMisses.Add(1)
-	default:
+	}
+	if !errors.Is(err, redis.Nil) {
 		// Redis bermasalah: jangan ikut menjatuhkan request, langsung ke DB.
-		c.stats.CacheErrors.Add(1)
 		log.Printf("redis GET %s gagal, fallback ke DB: %v", key, err)
 		return load(ctx)
 	}
@@ -74,12 +47,9 @@ func (c *Cache) Remember(ctx context.Context, key string, ttl time.Duration, loa
 	// singleflight: semua goroutine dengan key sama menunggu satu hasil.
 	// WithoutCancel: kalau client pertama memutus koneksi, request lain
 	// yang ikut menunggu tidak ikut gagal.
-	v, err, shared := c.group.Do(key, func() (any, error) {
+	v, err, _ := c.group.Do(key, func() (any, error) {
 		return c.fillWithLock(context.WithoutCancel(ctx), key, ttl, load)
 	})
-	if shared {
-		c.stats.SingleflightDup.Add(1)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +119,6 @@ func (c *Cache) fillWithLock(ctx context.Context, key string, ttl time.Duration,
 	}
 
 	// Instance lain sedang mengisi. Tunggu sebentar, lalu baca hasilnya.
-	c.stats.LockWaits.Add(1)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)

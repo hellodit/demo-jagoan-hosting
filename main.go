@@ -58,17 +58,14 @@ func main() {
 		log.Fatalf("redis: %v", err)
 	}
 
-	// Stats dipisah per variasi supaya angka /nocache dan /cache tidak tercampur.
-	nocacheStats, cacheStats := &Stats{}, &Stats{}
-	nocache := &NoCacheHandler{repo: &Repo{db: db, stats: nocacheStats}}
+	repo := &Repo{db: db}
+	nocache := &NoCacheHandler{repo: repo}
 	cached := &CachedHandler{
 		cfg:   cfg,
-		repo:  &Repo{db: db, stats: cacheStats},
+		repo:  repo,
 		rdb:   rdb,
-		cache: &Cache{rdb: rdb, protect: cfg.StampedeProtect, stats: cacheStats},
-		stats: cacheStats,
+		cache: &Cache{rdb: rdb, protect: cfg.StampedeProtect},
 	}
-	debug := &DebugHandler{cfg: cfg, db: db, nocacheStats: nocacheStats, cacheStats: cacheStats}
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -86,9 +83,6 @@ func main() {
 	ca.GET("/products/popular", cached.Popular)
 	ca.GET("/products/:id", cached.ShowProduct)
 	ca.PUT("/products/:id", cached.UpdatePrice)
-
-	r.GET("/debug/stats", debug.DebugStats)
-	r.POST("/debug/stats/reset", debug.ResetStats)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,

@@ -2,7 +2,7 @@ package main
 
 import (
 	"errors"
-	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,29 +18,21 @@ type NoCacheHandler struct {
 
 // GET /api/nocache/products/:id
 func (h *NoCacheHandler) ShowProduct(c *gin.Context) {
-	id, ok := parseID(c)
-	if !ok {
-		return
-	}
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	ctx := c.Request.Context()
 
-	p, err := h.repo.FindProduct(c.Request.Context(), id)
+	p, err := h.repo.FindProduct(ctx, id)
 	if errors.Is(err, ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "produk tidak ditemukan"})
+		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
-	if err != nil {
-		serverError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, p)
+	c.JSON(200, p)
 }
 
 // GET /api/nocache/products/popular
 func (h *NoCacheHandler) Popular(c *gin.Context) {
-	items, err := h.repo.Popular(c.Request.Context(), 20)
-	if err != nil {
-		serverError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": items})
+	ctx := c.Request.Context()
+
+	items, _ := h.repo.Popular(ctx, 20)
+	c.JSON(200, gin.H{"data": items})
 }

@@ -5,10 +5,8 @@ VARIANT ?= cache
 # dijangkau lewat 127.0.0.1: alamat 172.28.0.1 hanya berlaku dari dalam kontainer.
 -include .env
 DB  ?= $(or $(subst @172.28.0.1:,@127.0.0.1:,$(DATABASE_URL)),postgres://postgres@127.0.0.1:5432/shop?sslmode=disable)
-# App di kontainer (lihat docker-compose.yml). Lokal: make stats APP=http://localhost:8080
-APP ?= http://172.28.0.10:8080
 
-.PHONY: tidy build build-linux seed run run-sf deploy stats reset load stampede
+.PHONY: tidy build build-linux seed run run-sf deploy reset load stampede
 
 tidy:
 	go mod tidy
@@ -36,11 +34,7 @@ deploy:
 	git pull --ff-only
 	docker compose up -d --build
 
-stats:
-	curl -s $(APP)/debug/stats | jq
-
 reset:
-	curl -s -X POST $(APP)/debug/stats/reset
 	docker compose exec redis redis-cli --no-auth-warning FLUSHDB
 	psql "$(DB)" -c "SELECT pg_stat_statements_reset();"
 

@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
-
-const notFoundMarker = "__not_found__"
 
 // CachedHandler: endpoint /api/cache/...
 // Pola cache-aside: cek Redis dulu, baru ke PostgreSQL kalau miss.
@@ -22,86 +21,37 @@ type CachedHandler struct {
 	repo  *Repo
 	rdb   *redis.Client
 	cache *Cache
-	stats *Stats
 }
 
 // GET /api/cache/products/:id
 //
-// Ditulis "telanjang" (tanpa helper) supaya alur cache-aside terlihat
-// baris per baris: GET -> hit? kirim : query DB -> SET -> kirim.
+// Alur cache-aside: 1. cek Redis -> hit? kirim : 2. query DB -> 3. simpan -> kirim.
 func (h *CachedHandler) ShowProduct(c *gin.Context) {
-	id, ok := parseID(c)
-	if !ok {
-		return
-	}
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	ctx := c.Request.Context()
+
 	key := fmt.Sprintf("product:%d", id)
+	b, err := h.rdb.Get(ctx, key).Bytes() // 1. cek
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			log.Printf("redis error: %v", err) // fallback
+		}
 
-	// 1. Cek Redis dulu.
-	b, err := h.rdb.Get(ctx, key).Bytes()
-	if err == nil {
-		h.stats.CacheHits.Add(1)
-		writeProductBytes(c, b)
-		return
-	}
-	if errors.Is(err, redis.Nil) {
-		h.stats.CacheMisses.Add(1)
-	} else {
-		h.stats.CacheErrors.Add(1)
-		log.Printf("redis GET %s gagal, fallback ke DB: %v", key, err)
-	}
-
-	// 2. Miss: ambil dari PostgreSQL, 3. simpan ke Redis dengan TTL.
-	load := func(ctx context.Context) ([]byte, error) {
-		p, err := h.repo.FindProduct(ctx, id)
+		p, err := h.repo.FindProduct(ctx, id) // 2. miss
 		if errors.Is(err, ErrNotFound) {
-			// Negative caching: id yang tidak ada juga disimpan sebentar,
-			// supaya request ke id palsu tidak terus menghantam database.
-			h.rdb.Set(ctx, key, notFoundMarker, h.cfg.NotFoundTTL)
-			return []byte(notFoundMarker), nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		b, err := json.Marshal(p)
-		if err != nil {
-			return nil, err
-		}
-		h.rdb.Set(ctx, key, b, withJitter(h.cfg.ProductTTL))
-		return b, nil
-	}
-
-	if h.cache.protect {
-		// Miss bersamaan untuk produk yang sama digabung jadi satu query.
-		v, err, shared := h.cache.group.Do(key, func() (any, error) {
-			return load(context.WithoutCancel(ctx))
-		})
-		if shared {
-			h.stats.SingleflightDup.Add(1)
-		}
-		if err != nil {
-			serverError(c, err)
+			c.JSON(404, gin.H{"error": "not found"})
 			return
 		}
-		b = v.([]byte)
-	} else {
-		b, err = load(ctx)
 		if err != nil {
-			serverError(c, err)
+			c.JSON(500, gin.H{"error": "internal error"})
 			return
 		}
+
+		b, _ = json.Marshal(p)
+		h.rdb.Set(ctx, key, b, h.cfg.ProductTTL) // 3. simpan
 	}
 
-	writeProductBytes(c, b)
-}
-
-// Hit: byte JSON dari Redis dikirim apa adanya, tanpa unmarshal lalu marshal lagi.
-func writeProductBytes(c *gin.Context, b []byte) {
-	if string(b) == notFoundMarker {
-		c.JSON(http.StatusNotFound, gin.H{"error": "produk tidak ditemukan"})
-		return
-	}
-	c.Data(http.StatusOK, "application/json; charset=utf-8", b)
+	c.Data(200, "application/json", b)
 }
 
 // GET /api/cache/products/popular

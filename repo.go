@@ -62,13 +62,10 @@ JOIN products p ON p.id = s.product_id
 ORDER BY s.cnt DESC`
 
 type Repo struct {
-	db    *pgxpool.Pool
-	stats *Stats
+	db *pgxpool.Pool
 }
 
 func (r *Repo) FindProduct(ctx context.Context, id int64) (Product, error) {
-	r.stats.DBProductQueries.Add(1)
-
 	var p Product
 	err := r.db.QueryRow(ctx, productSQL, id).Scan(
 		&p.ID, &p.Name, &p.Price, &p.Stock,
@@ -82,8 +79,6 @@ func (r *Repo) FindProduct(ctx context.Context, id int64) (Product, error) {
 }
 
 func (r *Repo) Popular(ctx context.Context, limit int) ([]PopularItem, error) {
-	r.stats.DBPopularQueries.Add(1)
-
 	rows, err := r.db.Query(ctx, popularSQL, limit)
 	if err != nil {
 		return nil, err
